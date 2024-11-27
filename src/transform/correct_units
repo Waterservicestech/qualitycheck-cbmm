@@ -1,0 +1,89 @@
+import pandas as pd
+
+def verificar_e_corrigir_units(df_edd_results, df_depara_units):
+    """
+    Validates and corrects units in EDD results based on De-Para mappings.
+
+    Args:
+        df_edd_results (DataFrame): EDD results data.
+        df_depara_units (DataFrame): Mapping of units.
+
+    Returns:
+        None: Updates the `df_edd_results` in place.
+    """
+    conversions = {
+        ('µg/l', 'mg/l'): 0.001,
+        ('ug/l', 'mg/l'): 0.001,
+        ('mg/l', 'ug/l'): 1000,
+        ('miligrama-litro', 'ug/l'): 1000,
+    }
+
+    # Ensure necessary columns exist in the DataFrame
+    if 'comentario_correcao' not in df_edd_results.columns:
+        df_edd_results['comentario_correcao'] = ""
+    if 'acao' not in df_edd_results.columns:
+        df_edd_results['acao'] = ""
+
+    # Normalize units
+    df_edd_results['unit_org'] = df_edd_results['unit_org'].apply(lambda x: str(x).strip().lower() if isinstance(x, str) else x)
+    df_depara_units['original_unit'] = df_depara_units['original_unit'].apply(lambda x: str(x).strip().lower() if isinstance(x, str) else x)
+
+    # Perform the merge
+    merged_units_df = pd.merge(
+        df_edd_results[['unit_org', 'unit_hga', 'result_value']],
+        df_depara_units[['original_unit', 'hga_unit']],
+        left_on='unit_org',
+        right_on='original_unit',
+        how='left',
+        indicator=True
+    )
+
+    # Iterate through results and apply corrections
+    for index, row_edd in df_edd_results.iterrows():
+        row_merge = merged_units_df.iloc[index]
+
+        original_unit = row_edd['unit_org']
+        hga_unit = row_edd['unit_hga']
+
+        # Check if a conversion factor exists
+        if (original_unit, hga_unit) in conversions:
+            factor = conversions[(original_unit, hga_unit)]
+
+            # Attempt to convert the result value
+            result_value = str(row_edd['result_value']).replace('<', '').replace('>', '').replace(',', '.')
+            result_value_numeric = pd.to_numeric(result_value, errors='coerce')
+
+            if pd.notna(result_value_numeric):
+                previous_value = result_value_numeric
+                converted_value = previous_value * factor
+
+                # Apply the conversion and add a comment
+                df_edd_results.at[index, 'result_num_hga'] = converted_value
+                previous_comment = df_edd_results.at[index, 'comentario_correcao']
+                comment = (f"Conversão de unidade realizada: {original_unit} para {hga_unit}, "
+                           f"valor ajustado de {previous_value} para {converted_value}.")
+                if pd.notna(previous_comment) and previous_comment != "":
+                    comment = previous_comment + " / " + comment
+                df_edd_results.at[index, 'comentario_correcao'] = comment
+                df_edd_results.at[index, 'acao'] = 'corrigido'
+            else:
+                # If the result value is invalid, log an error
+                df_edd_results.at[index, 'acao'] = 'erro'
+                df_edd_results.at[index, 'comentario_correcao'] += " Valor numérico ausente ou inválido para conversão de unidade."
+        elif row_merge['_merge'] == 'left_only':
+            # If no mapping exists for unit_org
+            df_edd_results.at[index, 'acao'] = 'erro'
+            df_edd_results.at[index, 'comentario_correcao'] += " Não encontrado correspondência no de-para para unit_org."
+        elif hga_unit != row_merge['hga_unit']:
+            # If hga_unit needs to be corrected
+            previous_unit = hga_unit
+            corrected_unit = row_merge['hga_unit']
+            df_edd_results.at[index, 'unit_hga'] = corrected_unit
+
+            # Add a correction comment
+            previous_comment = df_edd_results.at[index, 'comentario_correcao']
+            comment = f"Correção: unit_hga ajustado de '{previous_unit}' para '{corrected_unit}' conforme De-Para."
+            if pd.notna(previous_comment) and previous_comment != "":
+                comment = previous_comment + " / " + comment
+            df_edd_results.at[index, 'comentario_correcao'] = comment
+            df_edd_results.at[index, 'acao'] = 'corrigido'

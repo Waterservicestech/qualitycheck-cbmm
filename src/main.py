@@ -75,7 +75,6 @@ def connect_to_database(server_name, database_name):
     conn = create_engine(connection_url)
     return conn
 
-
 @eel.expose
 def valid_connection(server_name, database_name):
     """Função para testar a conexão com um servidor.
